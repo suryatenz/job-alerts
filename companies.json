@@ -1,0 +1,25 @@
+{
+    "_comment": "Seed list of employers with public job board APIs. Verified live (curl) on 2026-08-07 — each slug returned real postings via Greenhouse/Lever's public API, no auth needed. Add more anytime: for a company's careers page, check if it's hosted on job-boards.greenhouse.io/<slug> or jobs.lever.co/<slug>, then add the slug below. If a slug ever 404s, fetch_jobs.py logs a warning and skips it rather than failing the whole run.",
+
+    "greenhouse": [
+        "anthropic",
+        "scaleai",
+        "databricks",
+        "stripe",
+        "robinhood",
+        "coinbase",
+        "affirm",
+        "asana",
+        "figma",
+        "discord",
+        "reddit",
+        "pinterest",
+        "gitlab",
+        "airbnb",
+        "brex"
+    ],
+
+    "lever": [
+        "palantir"
+    ]
+}

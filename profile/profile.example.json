@@ -1,0 +1,20 @@
+{
+    "full_name": "Your Full Name",
+    "first_name": "Your",
+    "last_name": "Name",
+    "email": "you@example.com",
+    "phone": "+1(555)555-5555",
+    "linkedin": "linkedin.com/in/your-handle",
+    "github": "github.com/your-handle",
+
+    "visa_status": "e.g. F1 student, OPT/CPT eligible, will need H-1B sponsorship for full-time roles",
+    "notice_period": "e.g. Available immediately / 2 weeks",
+    "salary_expectation": "e.g. Open / market rate for entry-level Data Scientist roles",
+    "willing_to_relocate": "e.g. Yes, prefer remote or Texas",
+
+    "answers": {
+        "Example: Do you have a portfolio link?": "Example: github.com/your-handle"
+    },
+
+    "approved_examples": []
+}

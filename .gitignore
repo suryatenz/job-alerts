@@ -1,0 +1,23 @@
+# NEVER commit real config — it contains API keys, SMTP password, Twilio creds
+config.json
+
+# Resume — entirely personal (master + any tailored examples)
+resume/
+
+# Runtime state and logs — regenerate on every run, never commit
+data/
+logs/
+last_run.txt
+
+# Personal application data — visa status, phone, draft answers
+profile/profile.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Anaconda / venv
+.env
+env/
+venv/

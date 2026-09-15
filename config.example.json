@@ -1,0 +1,27 @@
+{
+    "resume_path": "resume/resume.pdf",
+
+    "titles": ["Data Scientist", "AI Engineer", "AI Automation Engineer", "Data Analyst", "Machine Learning Engineer", "BI Developer"],
+    "locations": ["Remote", "Houston, TX", "Texas"],
+    "include_internships": true,
+    "max_jobs_per_day": 30,
+    "max_years_experience": 1,
+
+    "email_provider": "gmail",
+    "sender_email": "your@gmail.com",
+    "sender_app_password": "your-16-char-app-password",
+    "send_time": "18:55",
+
+    "anthropic_api_key": "sk-ant-your-key-here",
+    "anthropic_model": "claude-haiku-4-5",
+
+    "adzuna_app_id": "your-adzuna-app-id",
+    "adzuna_app_key": "your-adzuna-app-key",
+
+    "twilio_enabled": false,
+    "twilio_account_sid": "your-twilio-account-sid",
+    "twilio_auth_token": "your-twilio-auth-token",
+    "twilio_whatsapp_from": "whatsapp:+14155238886",
+    "twilio_whatsapp_to": "whatsapp:+15555550100",
+    "twilio_content_sid": "your-approved-template-content-sid"
+}

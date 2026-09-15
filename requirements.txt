@@ -1,0 +1,6 @@
+requests
+anthropic
+twilio
+PyPDF2
+Flask
+playwright
