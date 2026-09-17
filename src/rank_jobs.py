@@ -13,6 +13,7 @@ import anthropic
 import PyPDF2
 
 from fetch_jobs import enrich_descriptions
+from draft_applications import MODEL_PRICING
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -213,13 +214,16 @@ def rank_with_claude(jobs, resume_text, config):
     )
 
     usage = response.usage
-    cost = usage.input_tokens / 1_000_000 * 1.00 + usage.output_tokens / 1_000_000 * 5.00
+    input_rate, output_rate = MODEL_PRICING.get(model, MODEL_PRICING["claude-haiku-4-5"])
+    cost = usage.input_tokens / 1_000_000 * input_rate + usage.output_tokens / 1_000_000 * output_rate
     print(
-        f"Claude usage: {usage.input_tokens} input + {usage.output_tokens} output tokens "
+        f"Claude usage ({model}): {usage.input_tokens} input + {usage.output_tokens} output tokens "
         f"(~${cost:.4f} this run)"
     )
 
-    raw = response.content[0].text.strip()
+    # Some models (e.g. Opus 5) run adaptive thinking by default, which prepends a
+    # ThinkingBlock to response.content — find the actual text block, don't assume index 0.
+    raw = next(block.text for block in response.content if block.type == "text").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(json)?", "", raw).rstrip("`").strip()
     scores = json.loads(raw)

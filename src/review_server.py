@@ -16,13 +16,14 @@ import threading
 import webbrowser
 from html import escape
 
-from flask import Flask, request, redirect, url_for
+from flask import Flask, request, redirect, url_for, send_file, jsonify
 
 from applications_store import load_applications, save_applications
 from apply_to_job import detect_ats
 from draft_applications import load_profile, save_profile, add_approved_example
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 app = Flask(__name__)
 
@@ -120,7 +121,74 @@ PAGE_HEAD = """<!doctype html>
   }
   .fill { background: var(--accent); color: white; border: none; }
   .submitted-btn { color: var(--muted); }
+  .resume-box {
+    margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--border); font-size: 13px;
+  }
+  .resume-box a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .resume-box a:hover { text-decoration: underline; }
+  .score-up { color: var(--green); font-weight: 600; }
+  .tailor-wait { font-size: 12px; color: var(--muted); margin-left: 8px; }
 </style></head><body>
+"""
+
+TAILOR_SCRIPT = """
+<script>
+function tstart(btn) {
+  var idx = btn.dataset.idx, startUrl = btn.dataset.start, statusUrl = btn.dataset.status;
+  var actionsEl = document.getElementById('tailor-actions-' + idx);
+  btn.remove();
+  var wait = document.createElement('span');
+  wait.className = 'tailor-wait';
+  wait.textContent = 'Generating resume... usually 20-30s';
+  actionsEl.appendChild(wait);
+  fetch(startUrl, {method: 'POST'});
+  tpoll(idx, statusUrl, wait, 0);
+}
+
+function tpoll(idx, statusUrl, waitEl, attempt) {
+  fetch(statusUrl).then(function(r) { return r.json(); }).then(function(d) {
+    var resultEl = document.getElementById('tailor-result-' + idx);
+    if (d.ready) {
+      if (waitEl) waitEl.remove();
+      var html = '<a href="' + d.download_url + '">Download tailored resume &darr;</a>';
+      if (d.score_original !== null && d.score_tailored !== null) {
+        html += ' &middot; fit score: ' + d.score_original + '/100 &rarr; ' +
+                '<span class="score-up">' + d.score_tailored + '/100</span>';
+        if (d.score_reason) html += ' (' + d.score_reason + ')';
+      }
+      resultEl.innerHTML = html;
+      resultEl.hidden = false;
+      return;
+    }
+    if (d.failed) {
+      if (waitEl) waitEl.remove();
+      var actionsEl = document.getElementById('tailor-actions-' + idx);
+      var retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'tailor-btn';
+      retryBtn.textContent = 'Generate Tailored Resume (~$0.06)';
+      retryBtn.dataset.idx = idx;
+      retryBtn.dataset.start = d.start_url;
+      retryBtn.dataset.status = statusUrl;
+      retryBtn.onclick = function() { tstart(retryBtn); };
+      actionsEl.appendChild(retryBtn);
+      resultEl.textContent = 'Last generation attempt failed to compile — try again.';
+      resultEl.hidden = false;
+      return;
+    }
+    if (attempt < 40) {
+      setTimeout(function() { tpoll(idx, statusUrl, waitEl, attempt + 1); }, 3000);
+    } else if (waitEl) {
+      waitEl.textContent = 'Still working — refresh the page in a bit.';
+    }
+  }).catch(function() {
+    if (attempt < 40) {
+      setTimeout(function() { tpoll(idx, statusUrl, waitEl, attempt + 1); }, 3000);
+    }
+  });
+}
+</script>
 """
 
 
@@ -180,21 +248,48 @@ def render_page(apps, profile):
     if approved:
         for jid, a in approved.items():
             ats = detect_ats(a["apply_url"])
+            dom_id = escape(jid)
             html.append('<div class="job">')
             html.append(f"<p class='job-title'>{escape(a['title'])} "
                         f"<span class='ats-tag'>{escape(ats)}</span></p>")
             html.append(f"<div class='job-meta'><span>{escape(a['company'])}</span>"
                         f"<a href='{escape(a['apply_url'])}' target='_blank'>Apply link &rarr;</a></div>")
-            html.append("<div class='actions'>")
+            html.append(f"<div class='actions' id='tailor-actions-{dom_id}'>")
             if ats in ("greenhouse", "lever"):
                 html.append(f"<form method='post' action='{url_for('open_apply', job_id=jid)}' style='display:inline'>"
                             "<button type='submit' class='fill'>Open &amp; Fill Application</button></form>")
+            tailored = a.get("tailored_resume")
+            tailored_ready = tailored and tailored.get("compiled") and os.path.exists(
+                os.path.join(PROJECT_ROOT, tailored["pdf_path"]))
+            tailored_failed = tailored and not tailored.get("compiled")
+            if not tailored_ready:
+                html.append(
+                    f"<button type='button' class='tailor-btn' data-idx='{dom_id}' "
+                    f"data-start='{url_for('tailor', job_id=jid)}' "
+                    f"data-status='{url_for('tailor_status', job_id=jid)}' "
+                    "onclick='tstart(this)'>Generate Tailored Resume (~$0.06)</button>"
+                )
             html.append(f"<form method='post' action='{url_for('mark_submitted', job_id=jid)}' style='display:inline'>"
                         "<button type='submit' class='submitted-btn'>Mark as Submitted</button></form>")
-            html.append("</div></div>")
+            html.append("</div>")
+            html.append(f"<div class='resume-box' id='tailor-result-{dom_id}'"
+                        f"{'' if (tailored_ready or tailored_failed) else ' hidden'}>")
+            if tailored_ready:
+                so, st = tailored["score_original"], tailored["score_tailored"]
+                html.append(f"<a href='{url_for('download_resume', job_id=jid)}'>Download tailored resume &darr;</a>")
+                if so is not None and st is not None:
+                    html.append(f" &middot; fit score: {so}/100 &rarr; "
+                                f"<span class='score-up'>{st}/100</span>")
+                    if tailored.get("score_reason"):
+                        html.append(f" ({escape(tailored['score_reason'])})")
+            elif tailored_failed:
+                html.append("Last generation attempt failed to compile — try again.")
+            html.append("</div>")
+            html.append("</div>")
     html.append("</section>")
 
     html.append("<footer>Local-only, runs at 127.0.0.1:5000. Ctrl+C in the terminal to stop.</footer>")
+    html.append(TAILOR_SCRIPT)
     html.append("</body></html>")
     return "\n".join(html)
 
@@ -260,6 +355,55 @@ def open_apply(job_id):
         apply_script = os.path.join(SCRIPT_DIR, "apply_to_job.py")
         subprocess.Popen([sys.executable, apply_script, job_id], cwd=SCRIPT_DIR)
     return redirect(url_for("index"))
+
+
+@app.route("/tailor/<path:job_id>", methods=["POST"])
+def tailor(job_id):
+    """Launches tailor_resume.py as a detached subprocess, same non-blocking
+    pattern as open_apply — takes ~15-20s (Claude call + LaTeX compile + two
+    scoring calls), so this returns immediately rather than making the page hang.
+    Costs ~$0.06 real money per click; only ever runs when you click it."""
+    apps = load_applications()
+    if job_id in apps:
+        tailor_script = os.path.join(SCRIPT_DIR, "tailor_resume.py")
+        subprocess.Popen([sys.executable, tailor_script, job_id], cwd=SCRIPT_DIR)
+    return redirect(url_for("index"))
+
+
+@app.route("/tailor_status/<path:job_id>")
+def tailor_status(job_id):
+    """Polled by the page's JS every few seconds after a Generate click, so the
+    button can flip to a download link + scores without a manual page refresh."""
+    apps = load_applications()
+    entry = apps.get(job_id)
+    tailored = entry.get("tailored_resume") if entry else None
+    if not tailored:
+        return jsonify(ready=False, failed=False)
+
+    pdf_ok = tailored.get("compiled") and os.path.exists(os.path.join(PROJECT_ROOT, tailored.get("pdf_path", "")))
+    if pdf_ok:
+        return jsonify(
+            ready=True, failed=False,
+            download_url=url_for("download_resume", job_id=job_id),
+            score_original=tailored.get("score_original"),
+            score_tailored=tailored.get("score_tailored"),
+            score_reason=tailored.get("score_reason"),
+        )
+    return jsonify(ready=False, failed=True, start_url=url_for("tailor", job_id=job_id))
+
+
+@app.route("/resume/<path:job_id>")
+def download_resume(job_id):
+    apps = load_applications()
+    entry = apps.get(job_id)
+    tailored = entry.get("tailored_resume") if entry else None
+    if not tailored or not tailored.get("pdf_path"):
+        return redirect(url_for("index"))
+    pdf_path = os.path.join(PROJECT_ROOT, tailored["pdf_path"])
+    if not os.path.exists(pdf_path):
+        return redirect(url_for("index"))
+    download_name = f"{entry['company']}_{entry['title']}.pdf".replace("/", "-")
+    return send_file(pdf_path, as_attachment=True, download_name=download_name)
 
 
 @app.route("/submitted/<path:job_id>", methods=["POST"])

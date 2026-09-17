@@ -12,6 +12,7 @@ job-alerts/
 
   src/               # all code — run these directly, e.g. `python src/main.py`
     main.py, setup_scheduler.py, review_server.py, apply_to_job.py   # entry points
+    tailor_resume.py, skills_gap.py                                  # on-demand, free tools
     fetch_jobs.py, rank_jobs.py, draft_applications.py,
     applications_store.py, notify_email.py, notify_whatsapp.py       # core pipeline modules
 
@@ -22,6 +23,9 @@ job-alerts/
   resume/            # your resume assets — personal, entirely gitignored
     resume.pdf
     resume_template.tex   # LaTeX source, master version
+    master_reference.md   # fuller source of truth (real projects/experience)
+    generated/<date>/     # tailored resumes — PDFs only, this is what you browse
+    _dump/<date>/         # tailoring build scrap (.tex/.aux/.log) — not the deliverable
     examples/              # one-off tailored variants (not wired into the pipeline)
       automation_engineer.tex
       automation_engineer.pdf
@@ -42,13 +46,13 @@ Every script resolves `config.json`/`profile/`/`resume/`/`data/`/`logs/` via an 
 |---|---|
 | Job data (SimplifyJobs, Greenhouse, Lever, RemoteOK, Adzuna) | $0 |
 | Ranking against your resume (Claude Haiku) | ~$1.30/month (separate from your Claude Pro subscription — pay-per-token API billing at [console.anthropic.com](https://console.anthropic.com)) |
-| Drafting application content (Claude Haiku) | ~$1.50-2.50/month |
+| Drafting application content (`draft_model`, default Claude Sonnet 5) | ~$3-5/month at 30 jobs/day (real measured cost: ~$0.10-0.11/run) |
 | Daily scheduling (Windows Task Scheduler) | $0 |
 | Email delivery (Gmail SMTP) | $0 |
 | Review webpage (local Flask app) | $0 |
 | Application form-filling (Playwright/Chromium) | $0 (one-time ~200-300MB browser download) |
 | WhatsApp ping (Twilio) | ~$1-3/month, only if enabled |
-| **Total** | **~$2-4.50/month** (ranking + drafting), plus WhatsApp if you turn it on |
+| **Total** | **~$4-6/month** (ranking + drafting), plus WhatsApp if you turn it on. Set `draft_model` back to `claude-haiku-4-5` in `config.json` for the cheaper ~$2-3/month total, at lower writing quality. |
 
 If the Anthropic API key runs out of credit or isn't configured, ranking falls back to a simple keyword-match score automatically — the digest still sends, just less precisely ranked.
 
@@ -85,9 +89,30 @@ Postings from sources other than Greenhouse/Lever (most of SimplifyJobs' feed ro
 - Daily automatically: run `python src/setup_scheduler.py` once (no admin rights needed — it registers a standard, non-elevated Task Scheduler job called `JobAlertsDigest` that runs `src/main.py` daily at the time set in `config.json`'s `send_time`, default 18:55)
 - Logs go to `logs/job_log.txt`. Remove the task with `schtasks /delete /tn JobAlertsDigest /f`.
 
-## Resume tailoring (manual, per-job)
+## Resume tailoring (on-demand, per-job — never automatic)
 
-`resume/resume_template.tex` is the LaTeX source behind `resume/resume.pdf` (a RenderCV-style template). Compiling it locally uses MiKTeX (`pdflatex`), installed once in user-mode — no admin rights needed. This isn't wired into the automated pipeline yet; it's a manual workflow where real bullets get reworded/reordered/re-emphasized per job posting (never fabricated) and recompiled to a tailored PDF.
+`resume/resume_template.tex` is the LaTeX source behind `resume/resume.pdf` (a RenderCV-style template). Compiling it locally uses MiKTeX (`pdflatex`), installed once in user-mode — no admin rights needed.
+
+This is deliberately **not** wired into the daily `main.py` run — at 30 jobs/day it would cost ~$56/month just for resumes. Instead, `src/tailor_resume.py` is on-demand:
+
+```
+python tailor_resume.py <job_id>     one specific job, by its exact id
+python tailor_resume.py tiktok       case-insensitive title/company search (lists matches if ambiguous)
+```
+
+It rewords/reorders/re-emphasizes real resume content for that job (never fabricates), and scores both your real resume and the tailored one against that job's description (0-100, via Haiku — cheap) so you can see whether it actually helped. Real cost: ~$0.06/resume.
+
+Output is split so `resume/generated/<YYYY-MM-DD>/` only ever holds the finished PDF you actually want to open/download — the LaTeX build scrap (`.tex`/`.aux`/`.log`) goes into `resume/_dump/<YYYY-MM-DD>/` instead, out of the way but kept in case you ever need to inspect the raw source.
+
+The same thing is reachable from the review page (`review_server.py`) — approved jobs get a **"Generate Tailored Resume"** button. Clicking it swaps the button for a "generating..." status and polls automatically; once it finishes (usually 20-30s), the download link and both scores appear right there next to the apply link, no page refresh needed.
+
+Both this and application drafting share a strict writing-style ruleset baked into the prompt (no hyphens or dashes anywhere, a banned-vocabulary list of AI-sounding words/phrases, no cliche openers, no formulaic AI sentence patterns) so the output reads like something you'd actually write, not something a model generated. It's not perfect — an LLM won't hit 100% compliance on any style rule — but it catches the large majority.
+
+`resume/master_reference.md` is the fuller source of truth this pulls from (or will, once wired in) — your complete real project/experience history, richer than what fits on the one-page resume, with anything unverified explicitly flagged rather than guessed.
+
+## Skills gap analysis (free, local, no API calls)
+
+`src/skills_gap.py` scans every job description accumulated in `data/applications.json` so far, counts how often common tools/skills show up, and checks which of those aren't anywhere in your resume or master reference. Run it any time: `python skills_gap.py`. Pure keyword frequency counting — no Claude call, $0 — meant to answer "what do these postings keep asking for that I don't have," not to replace judgment about what's actually worth learning.
 
 ## Adding more companies
 

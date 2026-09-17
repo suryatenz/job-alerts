@@ -40,6 +40,7 @@ def merge_new_drafts(apps, drafts):
             "title": d["title"],
             "company": d["company"],
             "apply_url": d["apply_url"],
+            "description": d.get("description", ""),
             "why_this_role": d["why_this_role"],
             "standard_answers": d["standard_answers"],
             "flagged_questions": d["flagged_questions"],

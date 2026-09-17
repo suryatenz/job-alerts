@@ -13,6 +13,8 @@ import html
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (job-alerts personal script)"}
@@ -83,10 +85,59 @@ def fetch_greenhouse_descriptions(slug, job_ids_wanted):
         return {}
 
 
+def _strip_json_ld_description(page_html):
+    """Many ATS pages (Ashby, Workday, etc.) embed a schema.org JobPosting as
+    <script type="application/ld+json">{"description": "<p>...</p>", ...}</script>.
+    That embedded description is clean, structured job text — a much better source
+    than stripping the whole rendered page. Try this first; return None if absent."""
+    for block in re.findall(
+        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        page_html, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            data = json.loads(block.strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        candidates = data if isinstance(data, list) else [data]
+        for item in candidates:
+            if isinstance(item, dict) and item.get("description"):
+                return html_to_text(item["description"])
+    return None
+
+
+def fetch_generic_description(url):
+    """Best-effort: fetch a job's own apply_url page and extract its text.
+    Used as a fallback for sources with no bulk description (SimplifyJobs entries
+    route to Ashby/Workday/company-custom sites with no shared API to batch-fetch
+    from). Prefers a JobPosting JSON-LD block if the page has one (clean, targeted);
+    otherwise falls back to the whole page stripped to text (messier — may include
+    nav/footer content — but still far better than nothing)."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return ""
+        # requests falls back to a Latin-1 guess when the server doesn't declare a
+        # charset, which garbles UTF-8 apostrophes/quotes into "â"-style mojibake.
+        # apparent_encoding sniffs the actual bytes instead of trusting a missing header.
+        resp.encoding = resp.apparent_encoding or resp.encoding
+        json_ld_desc = _strip_json_ld_description(resp.text)
+        if json_ld_desc:
+            return json_ld_desc[:4000]
+        # Strip <script>/<style> blocks (content included) before generic tag-stripping,
+        # so embedded JS/JSON never gets treated as visible page text.
+        cleaned = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", resp.text, flags=re.DOTALL | re.IGNORECASE)
+        return html_to_text(cleaned)[:4000]
+    except requests.RequestException:
+        return ""
+
+
 def enrich_descriptions(candidates):
     """Fill in full descriptions for a shortlist of jobs. Lever/RemoteOK/Adzuna
-    already carry full text from the bulk fetch; only Greenhouse needs a second,
-    targeted request (one per company board that has candidates, not per job)."""
+    already carry full text from the bulk fetch; Greenhouse gets one targeted
+    request per company board (not per job). Anything still empty after that
+    (mainly SimplifyJobs entries, which never carry a description) falls back to
+    a best-effort direct fetch of the job's own apply_url, run concurrently since
+    these are independent, slow, per-job HTTP requests."""
     greenhouse_ids_by_slug = {}
     for j in candidates:
         if j["source"] == "greenhouse":
@@ -99,6 +150,15 @@ def enrich_descriptions(candidates):
     for j in candidates:
         if j["id"] in desc_map:
             j["description"] = desc_map[j["id"]]
+
+    still_missing = [j for j in candidates if not j.get("description") and j.get("apply_url")]
+    if still_missing:
+        print(f"  Fetching fallback descriptions for {len(still_missing)} postings with no bulk description...")
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            fetched = pool.map(lambda j: fetch_generic_description(j["apply_url"]), still_missing)
+            for j, desc in zip(still_missing, fetched):
+                j["description"] = desc
+
     return candidates
 
 

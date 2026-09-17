@@ -19,6 +19,15 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 PROFILE_FILE = os.path.join(PROJECT_ROOT, "profile", "profile.json")
 MAX_APPROVED_EXAMPLES = 5
 
+# ($ per 1M input tokens, $ per 1M output tokens) — used for accurate cost logging
+# regardless of which model draft_model/anthropic_model points at.
+MODEL_PRICING = {
+    "claude-opus-5": (5.00, 25.00),
+    "claude-opus-4-8": (5.00, 25.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+}
+
 
 def load_profile():
     if not os.path.exists(PROFILE_FILE):
@@ -79,7 +88,10 @@ def generate_drafts(jobs, profile, config):
     if not api_key or "your-key" in api_key:
         raise RuntimeError("anthropic_api_key not set in config.json")
 
-    model = config.get("anthropic_model", "claude-haiku-4-5")
+    # Drafting is a writing task, not a scoring task — worth a stronger model than
+    # ranking uses. Configurable separately (draft_model) so ranking can stay on
+    # cheap Haiku while drafting uses something better, independently of each other.
+    model = config.get("draft_model") or config.get("anthropic_model", "claude-haiku-4-5")
     client = anthropic.Anthropic(api_key=api_key)
 
     listing = "\n".join(
@@ -122,7 +134,35 @@ def generate_drafts(jobs, profile, config):
         "skills/experience/interests and the role's actual responsibilities — never mention sponsorship, visa "
         "status, or immigration there at all. The candidate's own visa/work-authorization status belongs only "
         "in standard_answers, stated as a plain fact about the candidate, never dressed up with claims about "
-        "the employer's policies."
+        "the employer's policies.\n\n"
+        "WRITING STYLE — apply this to every sentence you write, no exceptions:\n"
+        "1. Stay tight to the given resume and job description. Do not add generic industry commentary, "
+        "career-advice framing, or claims that reach beyond what the resume and posting actually say.\n"
+        "2. Never use a hyphen or dash for any reason — not to join two clauses (no 'X — Y', no 'X - Y'), and "
+        "not inside a compound word either. Write 'decision making' not 'decision-making', 'data driven' not "
+        "'data-driven', 'end to end' not 'end-to-end'. The only exception is a proper noun that is already "
+        "spelled with a hyphen in the source resume (a product or technology name) — leave that exact spelling "
+        "alone; otherwise split the words apart or rephrase.\n"
+        "3. Do not use AI-sounding vocabulary. Banned words/phrases include: leverage, delve, tapestry, realm, "
+        "robust, seamless, cutting edge, unlock, elevate, game changer, dynamic, innovative, passionate, "
+        "thrilled, excited, furthermore, moreover, in today's, it's worth noting, at the end of the day, "
+        "holistic, synergy, arena, arsenal, bombard, captivate, catapult, fast paced, foster, harness, "
+        "navigate, revolutionary, skyrocket, supercharge, embark, deep dive, drive impact, unlock value, "
+        "strategic alignment, operational excellence, continuous improvement.\n"
+        "4. Never open with a cliche framing device: 'in today's fast-paced world', 'in a world where', "
+        "'picture this', 'imagine a world'. Start with a concrete fact instead.\n"
+        "5. Never use these AI sentence-pattern tells: 'It's not about X, it's about Y', 'Not because X, but "
+        "because Y', 'That's not X, that's Y', three short punchy declaratives in a row ('X. Y. Z.'), or a "
+        "rhetorical question answered in the next sentence ('And the result? Significant.').\n"
+        "6. Be crisp. Do not restate the question before answering it, do not preview what you're about to say, "
+        "do not pad with filler clauses. State the fact and stop.\n"
+        "7. Vary sentence length and opening word. Never start two consecutive sentences the same way.\n"
+        "8. No exclamation points, no rhetorical questions, no hedging ('I believe', 'I think', 'generally "
+        "speaking', 'to some extent') — state things as plain fact.\n"
+        "9. Avoid rule-of-three adjective lists ('innovative, dynamic, and forward-thinking'). One precise word "
+        "beats three vague ones.\n"
+        "10. Prefer concrete nouns (an actual tool, technology, or project name) over vague qualifiers like "
+        "'various', 'multiple', or 'a range of'."
     )
     user_msg = (
         f"CANDIDATE PROFILE:\n{_profile_summary(profile)}\n\n"
@@ -132,18 +172,22 @@ def generate_drafts(jobs, profile, config):
     response = client.messages.create(
         model=model,
         max_tokens=16000,
+        thinking={"type": "disabled"},
         system=system_prompt,
         messages=[{"role": "user", "content": user_msg}],
     )
 
     usage = response.usage
-    cost = usage.input_tokens / 1_000_000 * 1.00 + usage.output_tokens / 1_000_000 * 5.00
+    input_rate, output_rate = MODEL_PRICING.get(model, MODEL_PRICING["claude-haiku-4-5"])
+    cost = usage.input_tokens / 1_000_000 * input_rate + usage.output_tokens / 1_000_000 * output_rate
     print(
-        f"Claude usage (drafting): {usage.input_tokens} input + {usage.output_tokens} output tokens "
+        f"Claude usage (drafting, {model}): {usage.input_tokens} input + {usage.output_tokens} output tokens "
         f"(~${cost:.4f} this run)"
     )
 
-    raw = response.content[0].text.strip()
+    # Opus 5 runs adaptive thinking by default, which prepends a ThinkingBlock to
+    # response.content — find the actual text block instead of assuming index 0.
+    raw = next(block.text for block in response.content if block.type == "text").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(json)?", "", raw).rstrip("`").strip()
     entries = json.loads(raw)
@@ -159,6 +203,7 @@ def generate_drafts(jobs, profile, config):
             "title": job["title"],
             "company": job["company"],
             "apply_url": job["apply_url"],
+            "description": job.get("description", ""),
             "why_this_role": entry.get("why_this_role", ""),
             "standard_answers": entry.get("standard_answers", {}),
             "flagged_questions": entry.get("flagged_questions", []),
